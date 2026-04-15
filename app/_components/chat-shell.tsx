@@ -266,8 +266,8 @@ export default function ChatShell() {
 
   if (isLoading) {
     return (
-      <main className="h-screen w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] px-6 py-8 text-slate-950">
-        <div className="flex h-full items-center justify-center rounded-[2rem] border border-white/70 bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+      <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] text-slate-950">
+        <div className="flex h-full items-center justify-center bg-white/10 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
           <div className="w-full max-w-xl rounded-[2rem] border border-white/80 bg-white/70 p-8 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
             <div className="mb-5 flex items-center justify-between">
               <div>
@@ -304,8 +304,8 @@ export default function ChatShell() {
 
   if (!config) {
     return (
-      <main className="h-screen w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] px-6 py-8 text-slate-950">
-        <div className="flex h-full items-center justify-center rounded-[2rem] border border-white/70 bg-white/65 text-lg text-rose-600 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+      <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] text-slate-950">
+        <div className="flex h-full items-center justify-center bg-white/10 text-lg text-rose-600 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
           {error ?? "Unable to load chat workspace."}
         </div>
       </main>
@@ -313,8 +313,8 @@ export default function ChatShell() {
   }
 
   return (
-    <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] p-3 text-slate-950 sm:p-5">
-      <div className="relative flex h-full w-full overflow-hidden rounded-[2rem] border border-white/70 bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+    <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] text-slate-950">
+      <div className="relative flex h-full w-full overflow-hidden bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
         {isSidebarOpen ? (
           <div className="absolute inset-0 z-30 bg-slate-950/30 backdrop-blur-[2px] lg:hidden">
             <div className="h-full w-[min(22rem,88vw)]">
