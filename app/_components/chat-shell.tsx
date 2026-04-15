@@ -41,6 +41,7 @@ export default function ChatShell() {
   const [config, setConfig] = useState<ChatUiConfig | null>(null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeChatId, setActiveChatId] = useState(0);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isAddModelOpen, setIsAddModelOpen] = useState(false);
   const [addModelDraft, setAddModelDraft] = useState("");
   const [draft, setDraft] = useState("");
@@ -197,6 +198,7 @@ export default function ChatShell() {
       setConfig(data.config);
       setThreads(data.threads);
       setActiveChatId(data.activeChatId);
+      setIsSidebarOpen(false);
       setDraft("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to create chat.");
@@ -232,6 +234,7 @@ export default function ChatShell() {
 
   async function selectChat(threadId: number) {
     setActiveChatId(threadId);
+    setIsSidebarOpen(false);
     setError(null);
 
     try {
@@ -264,8 +267,36 @@ export default function ChatShell() {
   if (isLoading) {
     return (
       <main className="h-screen w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] px-6 py-8 text-slate-950">
-        <div className="flex h-full items-center justify-center rounded-[2rem] border border-white/70 bg-white/65 text-lg text-slate-600 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
-          Loading chat workspace...
+        <div className="flex h-full items-center justify-center rounded-[2rem] border border-white/70 bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+          <div className="w-full max-w-xl rounded-[2rem] border border-white/80 bg-white/70 p-8 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-500">
+                  Preparing workspace
+                </p>
+                <h1 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-900">
+                  Loading Scrapebot
+                </h1>
+              </div>
+              <div className="relative h-12 w-12">
+                <div className="absolute inset-0 rounded-full border-4 border-slate-200" />
+                <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[var(--accent)] border-r-[var(--accent)]" />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="h-3 w-32 animate-pulse rounded-full bg-slate-200" />
+              <div className="h-24 animate-pulse rounded-[1.5rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(226,232,240,0.7))]" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="h-16 animate-pulse rounded-[1.25rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(226,232,240,0.65))]" />
+                <div className="h-16 animate-pulse rounded-[1.25rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(226,232,240,0.65))]" />
+              </div>
+            </div>
+
+            <p className="mt-5 text-sm text-slate-600">
+              Pulling threads, model configuration, and local chat state.
+            </p>
+          </div>
         </div>
       </main>
     );
@@ -282,14 +313,41 @@ export default function ChatShell() {
   }
 
   return (
-    <main className="h-screen w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] text-slate-950">
-      <div className="flex h-full w-full overflow-hidden border border-white/70 bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+    <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] p-3 text-slate-950 sm:p-5">
+      <div className="relative flex h-full w-full overflow-hidden rounded-[2rem] border border-white/70 bg-white/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+        {isSidebarOpen ? (
+          <div className="absolute inset-0 z-30 bg-slate-950/30 backdrop-blur-[2px] lg:hidden">
+            <div className="h-full w-[min(22rem,88vw)]">
+              <ChatSidebar
+                activeChatId={activeChatId}
+                branding={config.sidebar}
+                actions={config.actions}
+                sections={config.sections}
+                recentChats={threads}
+                className="h-full w-full border-r border-slate-200/80"
+                onClearChat={clearChat}
+                onClearDraft={clearDraft}
+                onDeleteChat={deleteChat}
+                onNewChat={startNewChat}
+                onRequestClose={() => setIsSidebarOpen(false)}
+                onSelectChat={selectChat}
+              />
+            </div>
+            <button
+              type="button"
+              aria-label="Close chats"
+              onClick={() => setIsSidebarOpen(false)}
+              className="absolute inset-0 -z-10"
+            />
+          </div>
+        ) : null}
         <ChatSidebar
           activeChatId={activeChatId}
           branding={config.sidebar}
           actions={config.actions}
           sections={config.sections}
           recentChats={threads}
+          className="hidden lg:flex"
           onClearChat={clearChat}
           onClearDraft={clearDraft}
           onDeleteChat={deleteChat}
@@ -302,9 +360,10 @@ export default function ChatShell() {
             eyebrow={config.header.eyebrow}
             title={config.header.title}
             status={config.header.status}
+            onOpenSidebar={() => setIsSidebarOpen(true)}
           />
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="px-5 pt-6 sm:px-6">
+            <div className="px-4 pt-4 sm:px-6 sm:pt-6">
               <ChatMobileIntro
                 badge={config.mobileIntro.badge}
                 description={config.mobileIntro.description}

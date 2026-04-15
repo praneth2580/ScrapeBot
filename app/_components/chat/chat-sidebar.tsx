@@ -6,10 +6,12 @@ type ChatSidebarProps = {
   actions: ChatUiConfig["actions"];
   sections: ChatUiConfig["sections"];
   recentChats: ChatThread[];
+  className?: string;
   onClearChat: () => void;
   onClearDraft: () => void;
   onDeleteChat: (chatId: number) => void;
   onNewChat: () => void;
+  onRequestClose?: () => void;
   onSelectChat: (chatId: number) => void;
 };
 
@@ -19,21 +21,38 @@ export default function ChatSidebar({
   actions,
   sections,
   recentChats,
+  className,
   onClearChat,
   onClearDraft,
   onDeleteChat,
   onNewChat,
+  onRequestClose,
   onSelectChat,
 }: ChatSidebarProps) {
   return (
-    <aside className="no-scrollbar hidden h-full w-80 shrink-0 overflow-y-auto border-r border-slate-200/80 bg-slate-950 px-6 py-6 text-slate-100 lg:flex lg:flex-col">
+    <aside
+      className={`no-scrollbar flex h-full w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200/80 bg-slate-950 px-6 py-6 text-slate-100 ${className ?? "hidden lg:flex"}`}
+    >
       <div className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-[0.35em] text-amber-300/80">
-          {branding.badge}
-        </p>
-        <h1 className="text-xl font-semibold leading-snug">
-          {branding.title}
-        </h1>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.35em] text-amber-300/80">
+              {branding.badge}
+            </p>
+            <h1 className="mt-2 text-xl font-semibold leading-snug">
+              {branding.title}
+            </h1>
+          </div>
+          {onRequestClose ? (
+            <button
+              type="button"
+              onClick={onRequestClose}
+              className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-300 transition hover:border-white/20 hover:bg-white/10 lg:hidden"
+            >
+              Close
+            </button>
+          ) : null}
+        </div>
         <p className="max-w-xs text-sm leading-5 text-slate-300">
           {branding.description}
         </p>
@@ -84,7 +103,10 @@ export default function ChatSidebar({
               >
                 <button
                   type="button"
-                  onClick={() => onSelectChat(chat.id)}
+                  onClick={() => {
+                    onSelectChat(chat.id);
+                    onRequestClose?.();
+                  }}
                   className="w-full rounded-2xl px-4 py-3 pr-12 text-left"
                 >
                   <div className="flex items-start justify-between gap-3">

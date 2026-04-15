@@ -84,6 +84,22 @@ export type OllamaPullResponse = {
   completed?: number;
 };
 
+export type OllamaShowResponse = {
+  license?: string;
+  modelfile?: string;
+  parameters?: string;
+  template?: string;
+  details?: {
+    parent_model?: string;
+    format?: string;
+    family?: string;
+    families?: string[];
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+  model_info?: Record<string, string | number | boolean | null>;
+};
+
 export type OllamaConnectorOptions = {
   baseUrl?: string;
   model?: string;
@@ -207,6 +223,14 @@ export function createLocalOllamaConnector(options: OllamaConnectorOptions = {})
         body: JSON.stringify({
           name,
           stream: false,
+        }),
+      });
+    },
+    async showModel(name: string) {
+      return request<OllamaShowResponse>("/api/show", {
+        method: "POST",
+        body: JSON.stringify({
+          model: name,
         }),
       });
     },

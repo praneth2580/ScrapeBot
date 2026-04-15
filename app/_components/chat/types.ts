@@ -70,8 +70,13 @@ export type SendMessageRequest = {
 };
 
 export type ChatModelOption = {
-  label: string;
   value: string;
+  name: string;
+  version: string;
+  family?: string;
+  parameterSize?: string;
+  quantization?: string;
+  contextWindow?: number | null;
 };
 
 export type ChatModelsResponse = {
