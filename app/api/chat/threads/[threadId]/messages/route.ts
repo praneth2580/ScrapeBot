@@ -1,4 +1,4 @@
-import { appendMessage } from "@/app/lib/chat-store";
+import { saveUserMessage, generateReply } from "@/app/lib/chat-store";
 import type { SendMessageRequest } from "@/app/_components/chat/types";
 
 type Context = {
@@ -17,14 +17,23 @@ export async function POST(request: Request, { params }: Context) {
     return Response.json({ error: "Message text is required" }, { status: 400 });
   }
 
-  try {
-    const thread = await appendMessage(Number(threadId), text, model);
+  const numericThreadId = Number(threadId);
 
-    if (!thread) {
+  // Save the user message immediately
+  const threadAfterSave = saveUserMessage(numericThreadId, text);
+  if (!threadAfterSave) {
+    return Response.json({ error: "Thread not found" }, { status: 404 });
+  }
+
+  try {
+    // Generate the AI reply (this is the slow part)
+    const threadAfterReply = await generateReply(numericThreadId, model);
+
+    if (!threadAfterReply) {
       return Response.json({ error: "Thread not found" }, { status: 404 });
     }
 
-    return Response.json({ thread });
+    return Response.json({ thread: threadAfterReply });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unable to reach Ollama.";

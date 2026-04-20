@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { ollama, resolveAvailableOllamaModel } from "./ollama";
+import { ollama, resolveAvailableOllamaModel, type OllamaMessage } from "./ollama";
+import { agentFunctions, ollamaTools } from "./tools";
 import type {
   ChatShellData,
   ChatUiConfig,
@@ -70,21 +71,141 @@ function getTimestampLabel() {
 
 async function generateAssistantReply(messages: Message[], model?: string) {
   const resolvedModel = await resolveAvailableOllamaModel(model);
-  const response = await ollama.chat({
-    model: resolvedModel,
-    messages: messages.map((message) => ({
-      role: message.role,
-      content: message.text,
-    })),
-  });
+  
+  const ollamaMessages: OllamaMessage[] = messages.map((message) => ({
+    role: message.role as any,
+    content: message.text,
+  }));
 
-  const text = response.message.content.trim();
+  const MAX_STEPS = 5;
+  let step = 0;
+  let lastToolCallKey = "";
 
-  if (!text) {
-    throw new Error("Ollama returned an empty response.");
+  while (step < MAX_STEPS) {
+    step++;
+    const isLastStep = step === MAX_STEPS;
+    console.log(`[Agent] Step ${step}/${MAX_STEPS}${isLastStep ? " (final — no tools)" : ""}`);
+
+    const response = await ollama.chat({
+      model: resolvedModel,
+      messages: ollamaMessages,
+      // On the last step, omit tools to force the model to produce a text answer
+      tools: isLastStep ? undefined : ollamaTools,
+      stream: false,
+    });
+
+    const responseMessage = response.message;
+
+    // Collect tool calls from the proper field OR parse them from content text
+    let toolCalls = responseMessage.tool_calls ?? [];
+
+    // Fallback: some models (e.g. llama3.2) dump tool calls as JSON text in content
+    if (!isLastStep && toolCalls.length === 0 && responseMessage.content) {
+      const parsed = tryParseToolCallFromText(responseMessage.content);
+      if (parsed) {
+        toolCalls = [parsed];
+        // Clear the content since it was actually a tool call, not a real answer
+        responseMessage.content = "";
+      }
+    }
+
+    // Append the assistant message to history
+    ollamaMessages.push(responseMessage);
+
+    // If there are tool calls, execute them
+    if (toolCalls.length > 0) {
+      // Detect repeated identical tool calls to prevent infinite loops
+      const currentToolCallKey = JSON.stringify(
+        toolCalls.map((tc: any) => ({ name: tc.function.name, args: tc.function.arguments }))
+      );
+      if (currentToolCallKey === lastToolCallKey) {
+        console.log("[Agent] Detected repeated identical tool call — forcing final answer");
+        // Re-send without tools to force a text answer
+        const finalResponse = await ollama.chat({
+          model: resolvedModel,
+          messages: ollamaMessages,
+          stream: false,
+        });
+        const finalText = finalResponse.message.content?.trim();
+        if (finalText) {
+          return finalText;
+        }
+        throw new Error("Ollama returned an empty response after repeated tool calls.");
+      }
+      lastToolCallKey = currentToolCallKey;
+
+      for (const toolCall of toolCalls) {
+        const functionName = toolCall.function.name;
+        const functionArgs = toolCall.function.arguments;
+
+        console.log(`[Agent] Calling tool: ${functionName}`, functionArgs);
+
+        let functionResult = "";
+        try {
+          if (agentFunctions[functionName as keyof typeof agentFunctions]) {
+            functionResult = await (agentFunctions as any)[functionName](functionArgs);
+          } else {
+            functionResult = `Error: Tool "${functionName}" not found`;
+          }
+        } catch (err) {
+          functionResult = `Error executing tool: ${err}`;
+        }
+
+        console.log(`[Agent] Tool result:`, functionResult);
+
+        ollamaMessages.push({
+          role: "tool",
+          content: typeof functionResult === "string" ? functionResult : JSON.stringify(functionResult),
+        });
+      }
+      continue;
+    }
+
+    // No tool calls — this is the final text answer
+    const text = responseMessage.content?.trim();
+    if (!text) {
+      throw new Error("Ollama returned an empty response.");
+    }
+
+    return text;
   }
 
-  return text;
+  throw new Error("Agent reached maximum steps without answering.");
+}
+
+/**
+ * Some models don't use the tool_calls field properly — they write the
+ * tool invocation as JSON inside the content string instead.
+ * This function detects and normalizes that into a proper tool call object.
+ */
+function tryParseToolCallFromText(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    // Format: {"name": "funcName", "arguments": {...}}
+    if (parsed.name && typeof parsed.name === "string" && parsed.name in agentFunctions) {
+      return {
+        function: {
+          name: parsed.name,
+          arguments: parsed.arguments ?? {},
+        },
+      };
+    }
+
+    // Format: {"function": {"name": "funcName", "arguments": {...}}}
+    if (parsed.function?.name && typeof parsed.function.name === "string" && parsed.function.name in agentFunctions) {
+      return parsed;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function buildThreadMetadata(nextMessages: Message[]) {
@@ -230,11 +351,7 @@ export function deleteThread(threadId: number) {
   return true;
 }
 
-export async function appendMessage(
-  threadId: number,
-  text: string,
-  model?: string
-) {
+export function saveUserMessage(threadId: number, text: string) {
   const instance = ensureDb();
   const thread = getThread(threadId);
 
@@ -248,18 +365,7 @@ export async function appendMessage(
     text,
   };
 
-  const assistantText = await generateAssistantReply(
-    [...thread.messages, userMessage],
-    model
-  );
-
-  const assistantMessage: Message = {
-    id: Date.now() + 1,
-    role: "assistant",
-    text: assistantText,
-  };
-
-  const nextMessages = [...thread.messages, userMessage, assistantMessage];
+  const nextMessages = [...thread.messages, userMessage];
   const metadata = buildThreadMetadata(nextMessages);
 
   const insert = instance.transaction(() => {
@@ -281,6 +387,47 @@ export async function appendMessage(
     instance
       .prepare(
         `
+        UPDATE threads
+        SET title = ?, preview = ?, updated_at_label = ?, updated_at_ms = ?
+        WHERE id = ?
+        `
+      )
+      .run(
+        metadata.title,
+        metadata.preview,
+        metadata.updatedAt,
+        metadata.updatedAtMs,
+        threadId
+      );
+  });
+
+  insert();
+  return getThread(threadId);
+}
+
+export async function generateReply(threadId: number, model?: string) {
+  const instance = ensureDb();
+  const thread = getThread(threadId);
+
+  if (!thread) {
+    return null;
+  }
+
+  const assistantText = await generateAssistantReply(thread.messages, model);
+
+  const assistantMessage: Message = {
+    id: Date.now(),
+    role: "assistant",
+    text: assistantText,
+  };
+
+  const nextMessages = [...thread.messages, assistantMessage];
+  const metadata = buildThreadMetadata(nextMessages);
+
+  const insert = instance.transaction(() => {
+    instance
+      .prepare(
+        `
         INSERT INTO messages (id, thread_id, role, text, created_at_ms)
         VALUES (?, ?, ?, ?, ?)
         `
@@ -290,7 +437,7 @@ export async function appendMessage(
         threadId,
         assistantMessage.role,
         assistantMessage.text,
-        Date.now() + 1
+        Date.now()
       );
 
     instance

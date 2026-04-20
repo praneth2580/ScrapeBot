@@ -7,6 +7,7 @@ export type OllamaRole = "system" | "user" | "assistant" | "tool";
 export type OllamaMessage = {
   role: OllamaRole;
   content: string;
+  tool_calls?: any[];
 };
 
 export type OllamaChatOptions = {
@@ -16,6 +17,7 @@ export type OllamaChatOptions = {
   keepAlive?: string | number;
   format?: "json" | Record<string, unknown>;
   options?: Record<string, unknown>;
+  tools?: any[];
 };
 
 export type OllamaGenerateOptions = {
@@ -244,6 +246,7 @@ export function createLocalOllamaConnector(options: OllamaConnectorOptions = {})
           keep_alive: input.keepAlive,
           format: input.format,
           options: input.options,
+          tools: input.tools,
         }),
       });
     },

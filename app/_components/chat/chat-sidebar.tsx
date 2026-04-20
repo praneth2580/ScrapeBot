@@ -31,7 +31,7 @@ export default function ChatSidebar({
 }: ChatSidebarProps) {
   return (
     <aside
-      className={`no-scrollbar flex h-full w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200/80 bg-slate-950 px-6 py-6 text-slate-100 ${className ?? "hidden lg:flex"}`}
+      className={`no-scrollbar flex h-full w-80 shrink-0 flex-col overflow-y-auto border-r border-slate-200/80 dark:border-slate-700/60 bg-slate-950 px-6 py-6 text-slate-100 ${className ?? "hidden lg:flex"}`}
     >
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-3">

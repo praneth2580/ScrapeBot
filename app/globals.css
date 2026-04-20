@@ -1,8 +1,19 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --accent: #c97342;
+  --accent-strong: #b0622e;
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --accent: #e0924f;
+  --accent-strong: #e0924f;
 }
 
 @theme inline {
@@ -12,19 +23,16 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 * {
   box-sizing: border-box;
 }
 
 html {
   background: #d6e0ea;
+}
+
+html.dark {
+  background: #0d1117;
 }
 
 body {
@@ -41,6 +49,10 @@ input {
 
 ::selection {
   background: rgba(15, 23, 42, 0.16);
+}
+
+.dark ::selection {
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .no-scrollbar {
