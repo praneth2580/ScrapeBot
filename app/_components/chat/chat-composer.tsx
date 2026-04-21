@@ -179,7 +179,7 @@ export default function ChatComposer({
               </button>
               {isModelPickerOpen ? (
                 <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-[1.35rem] border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-[0_22px_60px_rgba(15,23,42,0.14)] dark:shadow-[0_22px_60px_rgba(0,0,0,0.4)]">
-                  <div className="max-h-72 overflow-y-auto p-2">
+                  <div className="no-scrollbar max-h-72 overflow-y-auto p-2">
                     {models.map((model) => {
                       const isActive = model.value === selectedModel;
 

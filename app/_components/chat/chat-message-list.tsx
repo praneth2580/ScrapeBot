@@ -16,7 +16,7 @@ export default function ChatMessageList({ messages }: ChatMessageListProps) {
   }
 
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto px-5 py-6 sm:px-6">
+    <div className="no-scrollbar flex-1 space-y-6 overflow-y-auto px-5 py-6 sm:px-6">
       {messages.map((message) => {
         const isUser = message.role === "user";
 
