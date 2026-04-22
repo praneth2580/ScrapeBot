@@ -1,5 +1,6 @@
 import type { ChatUiConfig } from "./types";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { FormEvent } from "react";
 import type { ChatModelOption } from "./types";
 
@@ -45,6 +46,7 @@ export default function ChatComposer({
   onSubmit,
 }: ChatComposerProps) {
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [isAllModelsModalOpen, setIsAllModelsModalOpen] = useState(false);
 
   const activeModel = useMemo(
     () => models.find((model) => model.value === selectedModel) ?? models[0],
@@ -68,7 +70,12 @@ export default function ChatComposer({
       { name: "qwen2.5:0.5b", description: "Extremely fast, tiny model", params: "0.5B", ctx: "32k ctx", size: "397 MB" },
       { name: "qwen2.5:7b", description: "Strong general purpose model", params: "7B", ctx: "128k ctx", size: "4.7 GB" },
       { name: "phi3:mini", description: "Microsoft's lightweight model", params: "3.8B", ctx: "4k ctx", size: "2.2 GB" },
-      { name: "mistral", description: "Solid 7B model", params: "7B", ctx: "8k ctx", size: "4.1 GB" }
+      { name: "mistral", description: "Solid 7B model", params: "7B", ctx: "8k ctx", size: "4.1 GB" },
+      { name: "llama3.1", description: "Meta's previous generation 8B", params: "8B", ctx: "128k ctx", size: "4.7 GB" },
+      { name: "gemma2:2b", description: "Google's lightweight model", params: "2B", ctx: "8k ctx", size: "1.6 GB" },
+      { name: "gemma2:9b", description: "Google's strong mid-size model", params: "9B", ctx: "8k ctx", size: "5.5 GB" },
+      { name: "deepseek-coder-v2", description: "Strong coding model", params: "16B", ctx: "32k ctx", size: "8.9 GB" },
+      { name: "nomic-embed-text", description: "Embedding model", params: "137M", ctx: "8k ctx", size: "274 MB" },
     ];
 
     const uninstalledModels = KNOWN_MODELS.filter(
@@ -77,7 +84,56 @@ export default function ChatComposer({
 
     return (
       <div className="relative border-t border-slate-200/80 dark:border-slate-700/60 bg-white/75 dark:bg-slate-800/75 px-4 py-2.5 backdrop-blur sm:px-5">
-        {isAddModelOpen ? (
+        {isAllModelsModalOpen ? createPortal(
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 backdrop-blur-sm p-4 sm:p-6">
+            <div className="w-full max-w-3xl max-h-[85vh] rounded-[2rem] border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 p-5 sm:px-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Model Library</h3>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Select a local model to pull via Ollama.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAllModelsModalOpen(false)}
+                  className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 sm:p-6 no-scrollbar">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {uninstalledModels.map((km) => (
+                    <button
+                      key={km.name}
+                      type="button"
+                      disabled={disabled || isAddingModel}
+                      onClick={() => {
+                        onAddModelDraftChange(km.name);
+                        setIsAllModelsModalOpen(false);
+                      }}
+                      className="flex flex-col gap-3 w-full rounded-[1.25rem] border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30 px-4 py-4 text-left transition hover:border-[var(--accent)] dark:hover:border-slate-500 hover:bg-white dark:hover:bg-slate-800 hover:shadow-md dark:hover:shadow-none"
+                    >
+                      <div>
+                        <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">{km.name}</span>
+                        <span className="block text-xs text-slate-500 dark:text-slate-400 mt-1">{km.description}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                        <span className="rounded-full border border-slate-200 dark:border-slate-600 px-2.5 py-0.5 bg-white dark:bg-slate-900 font-medium">{km.params}</span>
+                        <span className="rounded-full border border-slate-200 dark:border-slate-600 px-2.5 py-0.5 bg-white dark:bg-slate-900 font-medium">{km.ctx}</span>
+                        <span className="rounded-full border border-slate-200 dark:border-slate-600 px-2.5 py-0.5 bg-white dark:bg-slate-900 font-medium">{km.size}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        ) : null}
+
+        {isAddModelOpen && !isAllModelsModalOpen ? (
           <div className="absolute bottom-[calc(100%+0.75rem)] left-0 right-0 z-20 mx-auto w-[calc(100vw-2rem)] max-w-sm rounded-[1.5rem] border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-[0_24px_80px_rgba(15,23,42,0.16)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.4)] sm:left-auto sm:right-5 sm:mx-0 sm:w-full">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -118,7 +174,7 @@ export default function ChatComposer({
               <div className="mt-4">
                 <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">Popular options</p>
                 <div className="flex flex-col gap-2 max-h-[14rem] overflow-y-auto no-scrollbar pb-1 pr-1">
-                  {uninstalledModels.map((km) => (
+                  {uninstalledModels.slice(0, 3).map((km) => (
                     <button
                       key={km.name}
                       type="button"
@@ -137,6 +193,15 @@ export default function ChatComposer({
                       </div>
                     </button>
                   ))}
+                  {uninstalledModels.length > 3 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAllModelsModalOpen(true)}
+                      className="w-full mt-1 rounded-[1rem] border border-dashed border-slate-300 dark:border-slate-600 bg-transparent px-3 py-2.5 text-center text-[11px] font-medium text-slate-500 dark:text-slate-400 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                    >
+                      Show {uninstalledModels.length - 3} more models...
+                    </button>
+                  )}
                 </div>
               </div>
             )}

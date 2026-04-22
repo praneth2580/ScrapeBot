@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import TurndownService from "turndown";
+import { gfm } from "turndown-plugin-gfm";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const MAX_CONTENT_LENGTH = 12_000;
@@ -106,6 +107,9 @@ function htmlToMarkdown(html: string): string {
     codeBlockStyle: "fenced",
     bulletListMarker: "-",
   });
+
+  // Enable GitHub Flavored Markdown (tables, strikethrough, etc.)
+  turndown.use(gfm);
 
   // Skip images — they add noise without value for the LLM
   turndown.addRule("removeImages", {

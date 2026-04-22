@@ -21,9 +21,10 @@ export const agentFunctions = {
       return JSON.stringify({
         title: result.title,
         url: result.url,
+        format: "markdown",
         totalBatches: result.batches.length,
         batches: result.batches,
-        note: "Content was split into batches to avoid exceeding context limits and to aid efficient processing."
+        note: "IMPORTANT: The page content has been converted from HTML to Markdown. All data, including tables, is in Markdown format (e.g. pipe-table syntax like '| col1 | col2 |'), NOT raw HTML. Extract and present the data directly from the Markdown content provided. Content was split into batches to avoid exceeding context limits."
       }, null, 2);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

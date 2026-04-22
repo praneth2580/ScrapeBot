@@ -95,11 +95,10 @@ export default function ChatSidebar({
             return (
               <div
                 key={chat.id}
-                className={`group relative rounded-2xl border transition ${
-                  isActive
-                    ? "border-amber-300/40 bg-white/10"
-                    : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
-                }`}
+                className={`group relative rounded-2xl border transition ${isActive
+                  ? "border-amber-300/40 bg-white/10"
+                  : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10"
+                  }`}
               >
                 <button
                   type="button"
@@ -110,7 +109,7 @@ export default function ChatSidebar({
                   className="w-full rounded-2xl px-4 py-3 pr-12 text-left"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <p className="text-sm font-medium text-slate-100">{chat.title}</p>
+                    <p className="text-sm font-medium text-slate-100 whitespace-nowrap break-all">{chat.title}</p>
                     <span className="shrink-0 text-xs text-slate-400">
                       {chat.updatedAt}
                     </span>

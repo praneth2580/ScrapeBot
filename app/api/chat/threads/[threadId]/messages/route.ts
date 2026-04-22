@@ -9,7 +9,14 @@ type Context = {
 
 export async function POST(request: Request, { params }: Context) {
   const { threadId } = await params;
-  const body = (await request.json()) as Partial<SendMessageRequest>;
+
+  let body: Partial<SendMessageRequest>;
+  try {
+    body = (await request.json()) as Partial<SendMessageRequest>;
+  } catch {
+    return Response.json({ error: "Invalid or empty request body" }, { status: 400 });
+  }
+
   const text = body.text?.trim();
   const model = body.model?.trim();
 
