@@ -17,16 +17,14 @@ export const agentFunctions = {
     try {
       const result = await scrapeUrl(args.url);
 
-      const header = [
-        `# ${result.title}`,
-        `**URL:** ${result.url}`,
-        result.truncated ? "*Note: Content was truncated to fit context.*" : "",
-        "---",
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      return `${header}\n\n${result.markdown}`;
+      // Return the response as structured JSON with batches so the AI can process them independently
+      return JSON.stringify({
+        title: result.title,
+        url: result.url,
+        totalBatches: result.batches.length,
+        batches: result.batches,
+        note: "Content was split into batches to avoid exceeding context limits and to aid efficient processing."
+      }, null, 2);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[Agent Tool] Scrape failed:`, message);

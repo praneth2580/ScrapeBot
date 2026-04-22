@@ -36,13 +36,28 @@ async function stripNonContent(context: BrowserContext, url: string) {
   const page = await context.newPage();
 
   try {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
+    // Intercept and abort unnecessary resources to speed up page load and avoid timeouts
+    await page.route("**/*", (route) => {
+      const type = route.request().resourceType();
+      if (["image", "stylesheet", "font", "media", "other", "eventsource", "websocket"].includes(type)) {
+        route.abort().catch(() => {});
+      } else {
+        route.continue().catch(() => {});
+      }
     });
 
+    try {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
+    } catch (e) {
+      // Ignore timeout errors if we managed to load the DOM content partially
+      console.warn(`Navigation timeout or error for ${url}, attempting to extract content anyway.`, e);
+    }
+
     // Wait briefly for any lazy-loaded content
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1000);
 
     // Remove non-content elements from the DOM
     await page.evaluate(() => {
@@ -114,11 +129,10 @@ function htmlToMarkdown(html: string): string {
  *
  * Pipeline: navigate → strip non-content DOM → extract HTML → convert to markdown → truncate.
  */
-export async function scrapeUrl(url: string): Promise<{
+export async function scrapeUrl(url: string, maxBatchSize: number = 4000): Promise<{
   title: string;
   url: string;
-  markdown: string;
-  truncated: boolean;
+  batches: string[];
 }> {
   const browser = await getBrowser();
   const context = await browser.newContext({
@@ -131,12 +145,27 @@ export async function scrapeUrl(url: string): Promise<{
     const { title, html } = await stripNonContent(context, url);
     let markdown = htmlToMarkdown(html);
 
-    const truncated = markdown.length > MAX_CONTENT_LENGTH;
-    if (truncated) {
-      markdown = markdown.slice(0, MAX_CONTENT_LENGTH) + "\n\n[...truncated]";
+    // Split the markdown content into readable batches for the AI
+    const batches: string[] = [];
+    let currentBatch = "";
+    
+    // Split by paragraphs to preserve context
+    const paragraphs = markdown.split("\n\n");
+    for (const p of paragraphs) {
+      if (currentBatch.length + p.length > maxBatchSize && currentBatch.length > 0) {
+        batches.push(currentBatch.trim());
+        currentBatch = p;
+      } else {
+        currentBatch += (currentBatch.length > 0 ? "\n\n" : "") + p;
+      }
+    }
+    
+    // Add the final batch if there's anything left
+    if (currentBatch.trim().length > 0) {
+      batches.push(currentBatch.trim());
     }
 
-    return { title, url, markdown, truncated };
+    return { title, url, batches };
   } finally {
     await context.close();
   }

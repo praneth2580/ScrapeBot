@@ -1,6 +1,6 @@
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "llama3.2";
-const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 900_000; // 15 minutes for slower local models
 
 export type OllamaRole = "system" | "user" | "assistant" | "tool";
 
