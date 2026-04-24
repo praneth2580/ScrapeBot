@@ -1,4 +1,5 @@
 import { scrapeUrl } from "./scraper";
+import { ollama, resolveAvailableOllamaModel } from "./ollama";
 
 // Define the local JavaScript functions that the AI can call
 export const agentFunctions = {
@@ -11,24 +12,40 @@ export const agentFunctions = {
     console.log(`[Agent Tool] Getting current time`);
     return `The current time is ${new Date().toLocaleTimeString('en-US', { timeZone: args.timezone || 'UTC' })}`;
   },
-  scrapePage: async (args: { url: string }) => {
-    console.log(`[Agent Tool] Scraping ${args.url}`);
+  scrapePage: async (args: { url: string; prompt: string }) => {
+    console.log(`[Agent Tool] Scraping ${args.url} and analyzing with prompt: ${args.prompt}`);
 
     try {
       const result = await scrapeUrl(args.url);
+      const batches = result.batches;
 
-      // Return the response as structured JSON with batches so the AI can process them independently
-      return JSON.stringify({
-        title: result.title,
-        url: result.url,
-        format: "markdown",
-        totalBatches: result.batches.length,
-        batches: result.batches,
-        note: "IMPORTANT: The page content has been converted from HTML to Markdown. All data, including tables, is in Markdown format (e.g. pipe-table syntax like '| col1 | col2 |'), NOT raw HTML. Extract and present the data directly from the Markdown content provided. Content was split into batches to avoid exceeding context limits."
-      }, null, 2);
+      if (batches.length === 0) {
+        return `Error: No content found at ${args.url}`;
+      }
+
+      let previousResult = "";
+      const model = await resolveAvailableOllamaModel();
+
+      for (let i = 0; i < batches.length; i++) {
+        console.log(`[Agent Tool] Processing batch ${i + 1}/${batches.length}`);
+        let userContent = `You are analyzing data chunk by chunk. Here is chunk ${i + 1} of ${batches.length}:\n\n${batches[i]}\n\nUser Prompt: ${args.prompt}`;
+        if (previousResult) {
+          userContent += `\n\nPrevious analysis result:\n${previousResult}\n\nPlease incorporate or update the previous result based on this new chunk. Provide only the updated result.`;
+        }
+
+        const response = await ollama.chat({
+          model,
+          messages: [{ role: "user", content: userContent }],
+          stream: false,
+        });
+
+        previousResult = response.message.content || "";
+      }
+
+      return `Extraction from ${args.url} completed. Final result:\n\n${previousResult}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[Agent Tool] Scrape failed:`, message);
+      console.error(`[Agent Tool] Scrape & Analyze failed:`, message);
       return `Error scraping ${args.url}: ${message}`;
     }
   },
@@ -73,16 +90,20 @@ export const ollamaTools = [
     type: "function",
     function: {
       name: "scrapePage",
-      description: "Scrape the contents of a website URL and return the page content as clean markdown text. Use this when the user asks to read, extract, or analyze content from a web page.",
+      description: "Scrapes a web page and extracts specific information from it based on your prompt. Use this whenever the user asks you to read, scrape, or extract data from a URL.",
       parameters: {
         type: "object",
         properties: {
           url: {
             type: "string",
-            description: "The fully qualified URL to scrape, e.g. 'https://example.com' or 'https://en.wikipedia.org/wiki/Web_scraping'"
+            description: "The fully qualified URL to scrape, e.g. 'https://example.com'"
+          },
+          prompt: {
+            type: "string",
+            description: "The specific instructions on what data to extract or summarize from the page. E.g., 'Extract the users table' or 'Summarize the article'."
           }
         },
-        required: ["url"]
+        required: ["url", "prompt"]
       }
     }
   }

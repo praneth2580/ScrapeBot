@@ -71,21 +71,35 @@ function getTimestampLabel() {
 
 async function generateAssistantReply(messages: Message[], model?: string) {
   const resolvedModel = await resolveAvailableOllamaModel(model);
-  
-  const ollamaMessages: OllamaMessage[] = messages.map((message) => ({
-    role: message.role as any,
-    content: message.text,
-  }));
+
+  const ollamaMessages: OllamaMessage[] = [
+    {
+      role: "system",
+      content: "You are a helpful AI web scraping assistant. When the user asks you to scrape or extract data from a website, you MUST use the 'scrapePage' tool, providing both the URL and a specific prompt describing what data to extract (e.g. 'Extract all table data'). After you receive the result from the tool, present it to the user and STOP.",
+    },
+    ...messages.map((message) => ({
+      role: message.role as any,
+      content: message.text,
+    }))
+  ];
+
+  console.log("message", ollamaMessages)
 
   const MAX_STEPS = 5;
   let step = 0;
   let lastToolCallKey = "";
 
+  console.log(`\n--- [Agent] New Request Started ---`);
+  console.log(`[Agent] Model resolved: ${resolvedModel}`);
+  console.log(`[Agent] Initial messages count: ${messages.length}`);
+
   while (step < MAX_STEPS) {
     step++;
     const isLastStep = step === MAX_STEPS;
-    console.log(`[Agent] Step ${step}/${MAX_STEPS}${isLastStep ? " (final — no tools)" : ""}`);
+    console.log(`[Agent] >> Step ${step}/${MAX_STEPS}${isLastStep ? " (final — no tools)" : ""}`);
+    console.log(`[Agent] Sending chat request with ${ollamaMessages.length} messages in history...`);
 
+    const startTime = Date.now();
     const response = await ollama.chat({
       model: resolvedModel,
       messages: ollamaMessages,
@@ -93,6 +107,7 @@ async function generateAssistantReply(messages: Message[], model?: string) {
       tools: isLastStep ? undefined : ollamaTools,
       stream: false,
     });
+    console.log(`[Agent] Received response in ${Date.now() - startTime}ms.`);
 
     const responseMessage = response.message;
 
@@ -103,10 +118,15 @@ async function generateAssistantReply(messages: Message[], model?: string) {
     if (!isLastStep && toolCalls.length === 0 && responseMessage.content) {
       const parsed = tryParseToolCallFromText(responseMessage.content);
       if (parsed) {
+        console.log(`[Agent] Fallback: Successfully parsed tool call "${parsed.function.name}" from text content.`);
         toolCalls = [parsed];
         // Clear the content since it was actually a tool call, not a real answer
         responseMessage.content = "";
+      } else {
+        console.log(`[Agent] No tool calls detected in this step.`);
       }
+    } else if (toolCalls.length > 0) {
+      console.log(`[Agent] Detected ${toolCalls.length} tool call(s) from model response.`);
     }
 
     // Append the assistant message to history
@@ -138,7 +158,8 @@ async function generateAssistantReply(messages: Message[], model?: string) {
         const functionName = toolCall.function.name;
         const functionArgs = toolCall.function.arguments;
 
-        console.log(`[Agent] Calling tool: ${functionName}`, functionArgs);
+        console.log(`[Agent] >> Executing tool: "${functionName}" with args:`, functionArgs);
+        const toolStartTime = Date.now();
 
         let functionResult = "";
         try {
@@ -151,11 +172,15 @@ async function generateAssistantReply(messages: Message[], model?: string) {
           functionResult = `Error executing tool: ${err}`;
         }
 
-        console.log(`[Agent] Tool result:`, functionResult);
+        const duration = Date.now() - toolStartTime;
+        const resultString = typeof functionResult === "string" ? functionResult : JSON.stringify(functionResult);
+        const resultPreview = resultString.length > 150 ? resultString.slice(0, 150) + "... [truncated]" : resultString;
+
+        console.log(`[Agent] << Tool "${functionName}" completed in ${duration}ms. Preview: ${resultPreview}`);
 
         ollamaMessages.push({
           role: "tool",
-          content: typeof functionResult === "string" ? functionResult : JSON.stringify(functionResult),
+          content: resultString,
         });
       }
       continue;
@@ -167,6 +192,8 @@ async function generateAssistantReply(messages: Message[], model?: string) {
       throw new Error("Ollama returned an empty response.");
     }
 
+    console.log(`[Agent] Final text answer generated (${text.length} chars).`);
+    console.log(`--- [Agent] Request Completed ---\n`);
     return text;
   }
 
@@ -179,13 +206,14 @@ async function generateAssistantReply(messages: Message[], model?: string) {
  * This function detects and normalizes that into a proper tool call object.
  */
 function tryParseToolCallFromText(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+  // Extract the first JSON-like block from the text to ignore tokens like <|im_start|>
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed = JSON.parse(match[0]);
 
     // Format: {"name": "funcName", "arguments": {...}}
     if (parsed.name && typeof parsed.name === "string" && parsed.name in agentFunctions) {
