@@ -26,25 +26,63 @@ export async function POST(request: Request, { params }: Context) {
 
   const numericThreadId = Number(threadId);
 
-  // Save the user message immediately
   const threadAfterSave = saveUserMessage(numericThreadId, text);
   if (!threadAfterSave) {
     return Response.json({ error: "Thread not found" }, { status: 404 });
   }
 
-  try {
-    // Generate the AI reply (this is the slow part)
-    const threadAfterReply = await generateReply(numericThreadId, model);
+  const encoder = new TextEncoder();
 
-    if (!threadAfterReply) {
-      return Response.json({ error: "Thread not found" }, { status: 404 });
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (payload: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+      };
 
-    return Response.json({ thread: threadAfterReply });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to reach Ollama.";
+      try {
+        send({
+          type: "status",
+          step: 0,
+          maxSteps: 3,
+          label: "Message saved",
+          detail: "Starting assistant…",
+        });
 
-    return Response.json({ error: message }, { status: 502 });
-  }
+        const threadAfterReply = await generateReply(
+          numericThreadId,
+          model,
+          (progress) => {
+            send({
+              type: "status",
+              step: progress.step,
+              maxSteps: progress.maxSteps,
+              label: progress.label,
+              detail: progress.detail,
+            });
+          }
+        );
+
+        if (!threadAfterReply) {
+          send({ type: "error", error: "Thread not found" });
+          return;
+        }
+
+        send({ type: "done", thread: threadAfterReply });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to reach Ollama.";
+        send({ type: "error", error: message });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }

@@ -1,110 +1,78 @@
 import { scrapeUrl } from "./scraper";
 import { ollama, resolveAvailableOllamaModel } from "./ollama";
+import { getAIService } from "@/lib/ai/service";
+import { LOCAL_NUM_CTX } from "./page-context";
 
-// Define the local JavaScript functions that the AI can call
-export const agentFunctions = {
-  getWeather: async (args: { location: string }) => {
-    console.log(`[Agent Tool] Getting weather for ${args.location}`);
-    // In a real app, you would call a weather API here
-    return `The current weather in ${args.location} is sunny and 72°F.`;
-  },
-  getCurrentTime: async (args: { timezone?: string }) => {
-    console.log(`[Agent Tool] Getting current time`);
-    return `The current time is ${new Date().toLocaleTimeString('en-US', { timeZone: args.timezone || 'UTC' })}`;
-  },
-  scrapePage: async (args: { url: string; prompt: string }) => {
-    console.log(`[Agent Tool] Scraping ${args.url} and analyzing with prompt: ${args.prompt}`);
+const RUNNING_SUMMARY_CHARS = 800;
 
+/**
+ * Bounded page extraction. Each batch sees only a short running summary,
+ * so a long page does not resend the full previous analysis.
+ */
+export async function scrapePage(args: { url: string; prompt: string }) {
+  console.log(`[Agent Tool] Scraping ${args.url} and analyzing with prompt: ${args.prompt}`);
+
+  try {
+    const result = await scrapeUrl(args.url);
+    const batches = result.batches;
+
+    if (batches.length === 0) {
+      return `Error: No content found at ${args.url}`;
+    }
+
+    let previousResult = "";
+    const ai = getAIService();
+    let useRouter = true;
     try {
-      const result = await scrapeUrl(args.url);
-      const batches = result.batches;
+      await ai.reload();
+    } catch {
+      useRouter = false;
+    }
 
-      if (batches.length === 0) {
-        return `Error: No content found at ${args.url}`;
+    for (let i = 0; i < batches.length; i++) {
+      console.log(`[Agent Tool] Processing batch ${i + 1}/${batches.length}`);
+      let userContent = `Chunk ${i + 1} of ${batches.length}:\n\n${batches[i]}\n\nUser prompt: ${args.prompt}`;
+      if (previousResult) {
+        userContent += `\n\nRunning summary so far:\n${previousResult}\n\nUpdate the summary from this chunk. Keep it under ${RUNNING_SUMMARY_CHARS} characters.`;
+      } else {
+        userContent += `\n\nReply in under ${RUNNING_SUMMARY_CHARS} characters.`;
       }
 
-      let previousResult = "";
+      if (useRouter) {
+        try {
+          const routed = await ai.runTask({
+            task: "interpret",
+            system:
+              "You extract or summarize webpage content for the user. Return plain text (not JSON).",
+            input: userContent,
+            outputSchema: null,
+          });
+          previousResult = (routed.response.text || "").slice(0, RUNNING_SUMMARY_CHARS);
+          continue;
+        } catch (routerError) {
+          console.warn(
+            "[Agent Tool] AI router failed, falling back to Ollama:",
+            routerError instanceof Error ? routerError.message : routerError
+          );
+          useRouter = false;
+        }
+      }
+
       const model = await resolveAvailableOllamaModel();
+      const response = await ollama.chat({
+        model,
+        messages: [{ role: "user", content: userContent }],
+        options: { num_ctx: LOCAL_NUM_CTX },
+        stream: false,
+      });
 
-      for (let i = 0; i < batches.length; i++) {
-        console.log(`[Agent Tool] Processing batch ${i + 1}/${batches.length}`);
-        let userContent = `You are analyzing data chunk by chunk. Here is chunk ${i + 1} of ${batches.length}:\n\n${batches[i]}\n\nUser Prompt: ${args.prompt}`;
-        if (previousResult) {
-          userContent += `\n\nPrevious analysis result:\n${previousResult}\n\nPlease incorporate or update the previous result based on this new chunk. Provide only the updated result.`;
-        }
-
-        const response = await ollama.chat({
-          model,
-          messages: [{ role: "user", content: userContent }],
-          stream: false,
-        });
-
-        previousResult = response.message.content || "";
-      }
-
-      return `Extraction from ${args.url} completed. Final result:\n\n${previousResult}`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[Agent Tool] Scrape & Analyze failed:`, message);
-      return `Error scraping ${args.url}: ${message}`;
+      previousResult = (response.message.content || "").slice(0, RUNNING_SUMMARY_CHARS);
     }
-  },
-};
 
-// Define the JSON schema for Ollama to understand what tools are available
-export const ollamaTools = [
-  {
-    type: "function",
-    function: {
-      name: "getWeather",
-      description: "Get the current weather for a specific location.",
-      parameters: {
-        type: "object",
-        properties: {
-          location: {
-            type: "string",
-            description: "The city and state/country, e.g. 'San Francisco, CA' or 'London, UK'"
-          }
-        },
-        required: ["location"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "getCurrentTime",
-      description: "Get the current time, optionally for a specific timezone.",
-      parameters: {
-        type: "object",
-        properties: {
-          timezone: {
-            type: "string",
-            description: "The IANA timezone string, e.g. 'America/Los_Angeles' or 'Europe/London'. Defaults to UTC."
-          }
-        }
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "scrapePage",
-      description: "Scrapes a web page and extracts specific information from it based on your prompt. Use this whenever the user asks you to read, scrape, or extract data from a URL.",
-      parameters: {
-        type: "object",
-        properties: {
-          url: {
-            type: "string",
-            description: "The fully qualified URL to scrape, e.g. 'https://example.com'"
-          },
-          prompt: {
-            type: "string",
-            description: "The specific instructions on what data to extract or summarize from the page. E.g., 'Extract the users table' or 'Summarize the article'."
-          }
-        },
-        required: ["url", "prompt"]
-      }
-    }
+    return `Extraction from ${args.url} completed. Final result:\n\n${previousResult}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[Agent Tool] Scrape & Analyze failed:`, message);
+    return `Error scraping ${args.url}: ${message}`;
   }
-];
+}

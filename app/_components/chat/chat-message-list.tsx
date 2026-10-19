@@ -1,45 +1,83 @@
 import type { Message } from "./types";
+import ChatMarkdown from "./chat-markdown";
+import ChatThinking from "./chat-thinking";
 
 type ChatMessageListProps = {
   messages: Message[];
+  thinking?: {
+    label: string;
+    detail?: string | null;
+    step?: number;
+    maxSteps?: number;
+  } | null;
 };
 
-export default function ChatMessageList({ messages }: ChatMessageListProps) {
+export default function ChatMessageList({
+  messages,
+  thinking = null,
+}: ChatMessageListProps) {
   if (messages.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-5 py-6 text-center sm:px-6">
-        <div className="max-w-md rounded-[1.75rem] border border-dashed border-slate-300 dark:border-slate-600 bg-white/60 dark:bg-slate-800/60 px-6 py-8 text-slate-600 dark:text-slate-400">
-          Start a new conversation to see messages here.
+      <div className="flex flex-1 items-center justify-center px-5 py-8 text-center sm:px-8">
+        <div className="max-w-md rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-10 text-slate-600 dark:border-slate-600 dark:bg-slate-800/50 dark:text-slate-400">
+          <p className="text-base font-medium text-slate-800 dark:text-slate-200">
+            Start a conversation
+          </p>
+          <p className="mt-2 text-sm leading-6">
+            Ask about selectors, page structure, or scraping workflows — or parse a
+            URL from a new chat.
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="no-scrollbar flex-1 space-y-6 overflow-y-auto px-5 py-6 sm:px-6">
-      {messages.map((message) => {
-        const isUser = message.role === "user";
+    <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
+      <div className="flex w-full min-w-0 flex-col gap-5 px-4 py-5 pb-6 sm:px-6 sm:py-6 lg:px-8">
+        {messages.map((message) => {
+          const isUser = message.role === "user";
 
-        return (
-          <article
-            key={message.id}
-            className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-2xl rounded-[1.75rem] px-5 py-4 shadow-sm ${
-                isUser
-                  ? "bg-slate-950 dark:bg-slate-100 text-white dark:text-slate-900"
-                  : "border border-slate-200 dark:border-slate-700 bg-white/85 dark:bg-slate-800/85 text-slate-700 dark:text-slate-300"
-              }`}
+          return (
+            <article
+              key={message.id}
+              className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
             >
-              <p className="mb-2 text-xs font-medium uppercase tracking-[0.3em] opacity-60">
-                {message.role}
-              </p>
-              <p className="text-[15px] leading-7">{message.text}</p>
-            </div>
-          </article>
-        );
-      })}
+              <div
+                className={`min-w-0 overflow-hidden rounded-2xl px-4 py-3.5 shadow-sm sm:px-5 sm:py-4 ${
+                  isUser ? "max-w-[min(100%,52rem)]" : "w-full max-w-none"
+                } ${
+                  isUser
+                    ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
+                    : "border border-slate-200/90 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                }`}
+              >
+                <p
+                  className={`mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] ${
+                    isUser
+                      ? "text-white/55 dark:text-slate-900/45"
+                      : "text-slate-400 dark:text-slate-500"
+                  }`}
+                >
+                  {isUser ? "You" : "Scrapebot"}
+                </p>
+                <ChatMarkdown
+                  content={message.text}
+                  variant={isUser ? "user" : "assistant"}
+                />
+              </div>
+            </article>
+          );
+        })}
+        {thinking ? (
+          <ChatThinking
+            label={thinking.label}
+            detail={thinking.detail}
+            step={thinking.step}
+            maxSteps={thinking.maxSteps}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

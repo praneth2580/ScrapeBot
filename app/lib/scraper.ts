@@ -1,9 +1,10 @@
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
+import { capText, MAX_STORED_PAGE_CHARS } from "./page-context";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
-const MAX_CONTENT_LENGTH = 12_000;
+const MAX_CONTENT_LENGTH = MAX_STORED_PAGE_CHARS;
 
 let browserInstance: Browser | null = null;
 
@@ -16,6 +17,7 @@ async function getBrowser(): Promise<Browser> {
     return browserInstance;
   }
 
+  // PLAYWRIGHT_BROWSERS_PATH is set by the desktop shell to a userData cache.
   browserInstance = await chromium.launch({
     headless: true,
     args: [
@@ -136,6 +138,7 @@ function htmlToMarkdown(html: string): string {
 export async function scrapeUrl(url: string, maxBatchSize: number = 4000): Promise<{
   title: string;
   url: string;
+  markdown: string;
   batches: string[];
 }> {
   const browser = await getBrowser();
@@ -148,6 +151,9 @@ export async function scrapeUrl(url: string, maxBatchSize: number = 4000): Promi
   try {
     const { title, html } = await stripNonContent(context, url);
     let markdown = htmlToMarkdown(html);
+    if (markdown.length > MAX_CONTENT_LENGTH) {
+      markdown = `${capText(markdown, MAX_CONTENT_LENGTH)}\n\n[Page content truncated.]`;
+    }
 
     // Split the markdown content into readable batches for the AI
     const batches: string[] = [];
@@ -169,7 +175,7 @@ export async function scrapeUrl(url: string, maxBatchSize: number = 4000): Promi
       batches.push(currentBatch.trim());
     }
 
-    return { title, url, batches };
+    return { title, url, markdown, batches };
   } finally {
     await context.close();
   }

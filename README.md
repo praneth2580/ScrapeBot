@@ -13,6 +13,7 @@ The app gives you a polished multi-thread chat UI backed by a local Ollama serve
 - Create, clear, and delete chat threads
 - Compact chat composer with quick prompts
 - Local API routes for chat, models, and thread management
+- **Provider-agnostic AI layer** (`lib/ai/`) with mock, Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, custom, and CLI adapters — see [docs/ai-providers.md](docs/ai-providers.md) and `/settings`
 
 ## Stack
 
@@ -21,6 +22,8 @@ The app gives you a polished multi-thread chat UI backed by a local Ollama serve
 - TypeScript
 - Tailwind CSS `v4`
 - `better-sqlite3`
+- Playwright (Chromium for scraping)
+- Electron (optional desktop shell)
 - Ollama local API
 
 ## Requirements
@@ -28,6 +31,7 @@ The app gives you a polished multi-thread chat UI backed by a local Ollama serve
 - Node.js 20+
 - npm
 - Ollama installed locally and running
+- For scraping in the browser/dev workflow: Chromium via `npm run playwright:install`
 
 ## Getting Started
 
@@ -37,29 +41,59 @@ The app gives you a polished multi-thread chat UI backed by a local Ollama serve
 npm install
 ```
 
-2. Start Ollama in another terminal if it is not already running:
+2. Install Playwright Chromium (web/dev only; the desktop app does this on first launch):
+
+```bash
+npm run playwright:install
+```
+
+3. Start Ollama in another terminal if it is not already running:
 
 ```bash
 ollama serve
 ```
 
-3. Make sure you have at least one model available locally:
+4. Make sure you have at least one model available locally:
 
 ```bash
 ollama pull llama3.1
 ```
 
-4. Start the app:
+5. Start the app:
 
 ```bash
 npm run dev
 ```
 
-5. Open the app:
+6. Open the app:
 
 ```text
 http://localhost:3001
 ```
+
+### Desktop app
+
+Run the UI inside Electron (uses the Next dev server):
+
+```bash
+npm run electron:dev
+```
+
+Build installers (Chromium is **not** bundled — first launch downloads it into the user data folder):
+
+```bash
+npm run electron:dist
+```
+
+Artifacts land in `dist-electron/` (AppImage/deb on Linux, NSIS on Windows, DMG on macOS).
+
+On first desktop launch Scrapebot:
+1. Shows a setup window
+2. Runs `playwright install chromium` into `userData/ms-playwright`
+3. Starts the packaged Next server
+4. Opens the app window
+
+Data (SQLite, AI settings, secrets) is stored under Electron `userData/data` when running as a desktop app (`SCRAPEBOT_DATA_DIR`).
 
 ## Available Scripts
 
@@ -68,11 +102,18 @@ npm run dev
 npm run build
 npm run start
 npm run lint
+npm test
+npm run typecheck
+npm run playwright:install
+npm run electron:dev
+npm run electron:pack
+npm run electron:dist
 ```
 
 Notes:
 - `dev` runs on `0.0.0.0:3001`
 - `build` may require network access for Google Fonts during production builds
+- Desktop installers intentionally omit Chromium to stay smaller; an internet connection is required once on first launch
 
 ## Environment Variables
 
@@ -82,12 +123,18 @@ These are optional. The app works without them if Ollama is running with its def
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.2
 OLLAMA_TIMEOUT_MS=300000
+SCRAPEBOT_DATA_DIR=/path/to/data
+PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
+SCRAPEBOT_PORT=3210
 ```
 
 What they do:
 - `OLLAMA_BASE_URL`: points the app to your Ollama server
 - `OLLAMA_MODEL`: preferred default model
 - `OLLAMA_TIMEOUT_MS`: request timeout in milliseconds for long generations
+- `SCRAPEBOT_DATA_DIR`: writable directory for SQLite / AI settings / secrets (set automatically by Electron)
+- `PLAYWRIGHT_BROWSERS_PATH`: Playwright browser cache (set automatically by Electron)
+- `SCRAPEBOT_PORT`: packaged desktop server port (default `3210`; electron:dev uses `3001`)
 
 If `OLLAMA_MODEL` is not installed locally, the app falls back to the first available installed model.
 
@@ -102,7 +149,7 @@ If `OLLAMA_MODEL` is not installed locally, the app falls back to the first avai
 
 ### Persistence
 
-- SQLite database path: `data/chat.sqlite`
+- SQLite database path: `data/chat.sqlite` (or `$SCRAPEBOT_DATA_DIR/chat.sqlite` in the desktop app)
 - Threads and messages are stored locally on disk
 - UI copy/config is also read from SQLite
 
@@ -130,7 +177,16 @@ app/
     chat/
   lib/
     chat-store.ts
+    data-dir.ts
     ollama.ts
+electron/
+  main.js
+  preload.js
+  setup.html
+  install-chromium.js
+  start-server.js
+scripts/
+  assemble-standalone.mjs
 data/
   chat.sqlite
 ```

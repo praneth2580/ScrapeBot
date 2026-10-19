@@ -2,11 +2,22 @@
   "name": "scrapebot",
   "version": "0.1.0",
   "private": true,
+  "description": "Local-first scrape and chat desktop app",
+  "author": "Scrapebot",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsx --test lib/ai/__tests__/config.test.ts lib/ai/__tests__/registry-router.test.ts lib/ai/__tests__/structured-mock.test.ts lib/ai/__tests__/cancellation-cli-secrets.test.ts app/lib/__tests__/page-context.test.ts",
+    "typecheck": "tsc --noEmit",
+    "playwright:install": "playwright install chromium",
+    "assemble:desktop": "node scripts/assemble-standalone.mjs",
+    "electron:dev": "concurrently -k -n next,electron -c cyan,magenta \"npm run dev\" \"wait-on http://localhost:3001 && electron . --no-sandbox\"",
+    "electron:pack": "npm run build && npm run assemble:desktop && electron-builder --dir",
+    "electron:dist": "npm run build && npm run assemble:desktop && electron-builder",
+    "dist": "npm run electron:dist"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
@@ -14,18 +25,72 @@
     "playwright": "^1.59.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "turndown": "^7.2.4",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/turndown": "^5.0.6",
+    "concurrently": "^9.2.1",
+    "electron": "^37.2.6",
+    "electron-builder": "^25.1.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.scrapebot.app",
+    "productName": "Scrapebot",
+    "copyright": "Copyright © Scrapebot",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "electron/build"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone-app",
+        "to": "app"
+      }
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

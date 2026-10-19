@@ -5,6 +5,7 @@ type ChatHeaderProps = {
   eyebrow: string;
   title: string;
   status: string;
+  settingsHref?: string;
 };
 
 export default function ChatHeader({
@@ -14,16 +15,17 @@ export default function ChatHeader({
   eyebrow,
   title,
   status,
+  settingsHref = "/settings",
 }: ChatHeaderProps) {
   return (
-    <header className="border-b border-slate-200/80 dark:border-slate-700/60 bg-white/70 dark:bg-slate-800/70 px-5 py-4 backdrop-blur sm:px-6">
-      <div className="flex items-center justify-between gap-4">
+    <header className="shrink-0 border-b border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur-md dark:border-slate-700/60 dark:bg-slate-900/90 sm:px-6">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {onOpenSidebar ? (
             <button
               type="button"
               onClick={onOpenSidebar}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 shadow-sm transition hover:border-slate-300 dark:hover:border-slate-500 hover:bg-slate-50 dark:hover:bg-slate-600 lg:hidden"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 lg:hidden dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
               aria-label="Open chats"
             >
               <svg
@@ -43,17 +45,27 @@ export default function ChatHeader({
             </button>
           ) : null}
           <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{eyebrow}</p>
-            <h2 className="truncate text-lg font-semibold sm:text-xl">{title}</h2>
+            <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+              {eyebrow}
+            </p>
+            <h2 className="truncate text-base font-semibold sm:text-lg">{title}</h2>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2">
+          {settingsHref ? (
+            <a
+              href={settingsHref}
+              className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 sm:text-sm"
+            >
+              AI settings
+            </a>
+          ) : null}
           {onToggleTheme ? (
             <button
               type="button"
               onClick={onToggleTheme}
               aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-600 dark:text-amber-300 shadow-sm transition hover:border-slate-300 dark:hover:border-slate-500 hover:bg-slate-50 dark:hover:bg-slate-600"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-slate-700"
             >
               {isDark ? (
                 <svg aria-hidden="true" viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -74,7 +86,8 @@ export default function ChatHeader({
               )}
             </button>
           ) : null}
-          <div className="rounded-full border border-emerald-200 dark:border-emerald-700/60 bg-emerald-50 dark:bg-emerald-900/40 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 sm:text-sm">
+          <div className="hidden items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 sm:inline-flex dark:border-emerald-700/60 dark:bg-emerald-900/40 dark:text-emerald-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             {status}
           </div>
         </div>

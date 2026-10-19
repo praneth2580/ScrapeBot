@@ -6,6 +6,7 @@ import ChatHeader from "./chat/chat-header";
 import ChatMessageList from "./chat/chat-message-list";
 import ChatMobileIntro from "./chat/chat-mobile-intro";
 import ChatSidebar from "./chat/chat-sidebar";
+import ChatUrlPrompt from "./chat/chat-url-prompt";
 import type {
   AddChatModelRequest,
   ChatShellData,
@@ -16,11 +17,24 @@ import type {
   ChatUiConfig,
   CreateThreadResponse,
   ThreadResponse,
+  ParsePageRequest,
 } from "./chat/types";
 
 async function fetchJson<T>(input: RequestInfo, init?: RequestInit) {
   const response = await fetch(input, init);
-  const payload = (await response.json()) as T | { error?: string };
+  const raw = await response.text();
+  let payload: T | { error?: string } | null = null;
+
+  if (raw) {
+    try {
+      payload = JSON.parse(raw) as T | { error?: string };
+    } catch {
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      throw new Error("Server returned an invalid JSON response.");
+    }
+  }
 
   if (!response.ok) {
     const message =
@@ -32,6 +46,10 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit) {
         : `Request failed with status ${response.status}`;
 
     throw new Error(message);
+  }
+
+  if (payload === null) {
+    throw new Error("Server returned an empty response.");
   }
 
   return payload as T;
@@ -50,6 +68,17 @@ export default function ChatShell() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingModel, setIsAddingModel] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [replyStatus, setReplyStatus] = useState<{
+    label: string;
+    detail?: string | null;
+    step: number;
+    maxSteps: number;
+  } | null>(null);
+  const [isParsingPage, setIsParsingPage] = useState(false);
+  const [parseStatus, setParseStatus] = useState<string | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  /** Thread ids where the user skipped the URL prompt */
+  const [skippedUrlPromptIds, setSkippedUrlPromptIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(false);
 
@@ -59,6 +88,11 @@ export default function ChatShell() {
   );
 
   const messages = useMemo(() => activeThread?.messages ?? [], [activeThread]);
+
+  const showUrlPrompt = useMemo(() => {
+    if (!activeChatId || messages.length > 0) return false;
+    return !skippedUrlPromptIds.includes(activeChatId);
+  }, [activeChatId, messages.length, skippedUrlPromptIds]);
 
   // Sync dark class on <html> and persist preference
   useEffect(() => {
@@ -180,24 +214,83 @@ export default function ChatShell() {
     );
     setDraft("");
     setIsSubmitting(true);
+    setReplyStatus({
+      label: "Sending message",
+      detail: "Waiting for the assistant…",
+      step: 0,
+      maxSteps: 5,
+    });
     setError(null);
 
     try {
-      const data = await fetchJson<ThreadResponse>(
-        `/api/chat/threads/${activeChatId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ text: trimmed, model: selectedModel }),
-        }
-      );
+      const response = await fetch(`/api/chat/threads/${activeChatId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: trimmed, model: selectedModel }),
+      });
 
-      // Replace with the real server data (includes the AI response)
+      if (!response.ok || !response.body) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          payload?.error || `Request failed with status ${response.status}`
+        );
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let completedThread: ChatThread | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+
+        for (const chunk of chunks) {
+          const line = chunk
+            .split("\n")
+            .find((entry) => entry.startsWith("data: "));
+          if (!line) continue;
+
+          const payload = JSON.parse(line.slice(6)) as {
+            type: string;
+            step?: number;
+            maxSteps?: number;
+            label?: string;
+            detail?: string;
+            error?: string;
+            thread?: ChatThread;
+          };
+
+          if (payload.type === "status") {
+            setReplyStatus({
+              label: payload.label || "Working…",
+              detail: payload.detail ?? null,
+              step: payload.step ?? 0,
+              maxSteps: payload.maxSteps ?? 5,
+            });
+          } else if (payload.type === "done" && payload.thread) {
+            completedThread = payload.thread;
+          } else if (payload.type === "error") {
+            throw new Error(payload.error || "Unable to send message.");
+          }
+        }
+      }
+
+      if (!completedThread) {
+        throw new Error("Assistant closed the connection without a reply.");
+      }
+
       setThreads((current) =>
         current.map((thread) =>
-          thread.id === activeChatId ? data.thread : thread
+          thread.id === activeChatId ? completedThread! : thread
         )
       );
       await refreshThreads();
@@ -207,6 +300,7 @@ export default function ChatShell() {
       );
     } finally {
       setIsSubmitting(false);
+      setReplyStatus(null);
     }
   }
 
@@ -240,6 +334,7 @@ export default function ChatShell() {
 
   async function startNewChat() {
     setError(null);
+    setParseError(null);
 
     try {
       const data = await fetchJson<CreateThreadResponse>("/api/chat/threads", {
@@ -248,11 +343,69 @@ export default function ChatShell() {
       setConfig(data.config);
       setThreads(data.threads);
       setActiveChatId(data.activeChatId);
+      setSkippedUrlPromptIds((current) =>
+        current.filter((id) => id !== data.activeChatId)
+      );
       setIsSidebarOpen(false);
       setDraft("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to create chat.");
     }
+  }
+
+  async function parsePageForActiveChat(url: string, focus?: string) {
+    if (!activeChatId) return;
+
+    setIsParsingPage(true);
+    setParseStatus("Opening page in headless browser…");
+    setParseError(null);
+    setError(null);
+
+    // Timed status hints while Playwright scrapes (no streaming on parse yet).
+    const timers = [
+      window.setTimeout(
+        () => setParseStatus("Extracting readable content…"),
+        2500
+      ),
+      window.setTimeout(
+        () => setParseStatus("Saving page context for this chat…"),
+        7000
+      ),
+    ];
+
+    try {
+      const data = await fetchJson<ThreadResponse>(
+        `/api/chat/threads/${activeChatId}/parse`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, focus } satisfies ParsePageRequest),
+        }
+      );
+
+      setThreads((current) =>
+        current.map((thread) =>
+          thread.id === activeChatId ? data.thread : thread
+        )
+      );
+      await refreshThreads();
+    } catch (err) {
+      setParseError(
+        err instanceof Error ? err.message : "Unable to parse the page."
+      );
+    } finally {
+      for (const timer of timers) window.clearTimeout(timer);
+      setIsParsingPage(false);
+      setParseStatus(null);
+    }
+  }
+
+  function skipUrlPrompt() {
+    if (!activeChatId) return;
+    setParseError(null);
+    setSkippedUrlPromptIds((current) =>
+      current.includes(activeChatId) ? current : [...current, activeChatId]
+    );
   }
 
   async function clearChat() {
@@ -261,6 +414,7 @@ export default function ChatShell() {
     }
 
     setError(null);
+    setParseError(null);
 
     try {
       const data = await fetchJson<ThreadResponse>(
@@ -271,6 +425,10 @@ export default function ChatShell() {
         current.map((thread) =>
           thread.id === activeChatId ? data.thread : thread
         )
+      );
+      // After clear, ask for a page URL again
+      setSkippedUrlPromptIds((current) =>
+        current.filter((id) => id !== activeChatId)
       );
       await refreshThreads();
     } catch (error) {
@@ -316,37 +474,29 @@ export default function ChatShell() {
 
   if (isLoading) {
     return (
-      <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] dark:bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.9),_rgba(10,15,25,0.8)_30%,_#0d1117_100%)] text-slate-950 dark:text-slate-100">
-        <div className="flex h-full items-center justify-center bg-white/10 dark:bg-slate-900/30 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
-          <div className="w-full max-w-xl rounded-[2rem] border border-white/80 dark:border-slate-700/60 bg-white/70 dark:bg-slate-800/70 p-8 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-500 dark:text-slate-400">
-                  Preparing workspace
-                </p>
-                <h1 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-slate-900 dark:text-slate-100">
-                  Loading Scrapebot
-                </h1>
-              </div>
-              <div className="relative h-12 w-12">
-                <div className="absolute inset-0 rounded-full border-4 border-slate-200 dark:border-slate-600" />
-                <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[var(--accent)] border-r-[var(--accent)]" />
-              </div>
+      <main className="flex h-[100dvh] w-full items-center justify-center bg-slate-100 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200/80 bg-white p-8 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">
+                Preparing workspace
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+                Loading Scrapebot
+              </h1>
             </div>
-
-            <div className="space-y-3">
-              <div className="h-3 w-32 animate-pulse rounded-full bg-slate-200 dark:bg-slate-700" />
-              <div className="h-24 animate-pulse rounded-[1.5rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(226,232,240,0.7))] dark:bg-[linear-gradient(135deg,rgba(30,41,59,0.95),rgba(15,23,42,0.7))]" />
-              <div className="grid grid-cols-2 gap-3">
-                <div className="h-16 animate-pulse rounded-[1.25rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(226,232,240,0.65))] dark:bg-[linear-gradient(135deg,rgba(30,41,59,0.9),rgba(15,23,42,0.65))]" />
-                <div className="h-16 animate-pulse rounded-[1.25rem] bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(226,232,240,0.65))] dark:bg-[linear-gradient(135deg,rgba(30,41,59,0.9),rgba(15,23,42,0.65))]" />
-              </div>
+            <div className="relative h-11 w-11">
+              <div className="absolute inset-0 rounded-full border-4 border-slate-200 dark:border-slate-700" />
+              <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-[var(--accent)] border-r-[var(--accent)]" />
             </div>
-
-            <p className="mt-5 text-sm text-slate-600 dark:text-slate-400">
-              Pulling threads, model configuration, and local chat state.
-            </p>
           </div>
+          <div className="space-y-3">
+            <div className="h-3 w-28 animate-pulse rounded-full bg-slate-200 dark:bg-slate-700" />
+            <div className="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-800" />
+          </div>
+          <p className="mt-5 text-sm text-slate-500 dark:text-slate-400">
+            Pulling threads, model configuration, and local chat state.
+          </p>
         </div>
       </main>
     );
@@ -354,27 +504,25 @@ export default function ChatShell() {
 
   if (!config) {
     return (
-      <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] dark:bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.9),_rgba(10,15,25,0.8)_30%,_#0d1117_100%)] text-slate-950 dark:text-slate-100">
-        <div className="flex h-full items-center justify-center bg-white/10 dark:bg-slate-900/30 text-lg text-rose-600 dark:text-rose-400 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
-          {error ?? "Unable to load chat workspace."}
-        </div>
+      <main className="flex h-[100dvh] w-full items-center justify-center bg-slate-100 px-6 text-center text-lg text-rose-600 dark:bg-slate-950 dark:text-rose-400">
+        {error ?? "Unable to load chat workspace."}
       </main>
     );
   }
 
   return (
-    <main className="h-dvh w-full bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.9),_rgba(244,239,230,0.8)_30%,_#d6e0ea_100%)] dark:bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.9),_rgba(10,15,25,0.8)_30%,_#0d1117_100%)] text-slate-950 dark:text-slate-100">
-      <div className="relative flex h-full w-full overflow-hidden bg-white/65 dark:bg-slate-900/65 shadow-[0_30px_120px_rgba(15,23,42,0.16)] backdrop-blur">
+    <main className="flex h-[100dvh] w-full overflow-hidden bg-slate-100 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+      <div className="relative flex h-full min-h-0 w-full overflow-hidden bg-white dark:bg-slate-900">
         {isSidebarOpen ? (
-          <div className="absolute inset-0 z-30 bg-slate-950/30 dark:bg-black/50 backdrop-blur-[2px] lg:hidden">
-            <div className="h-full w-[min(22rem,88vw)]">
+          <div className="absolute inset-0 z-30 bg-slate-950/35 backdrop-blur-[2px] lg:hidden dark:bg-black/50">
+            <div className="h-full w-[min(20rem,88vw)] shadow-2xl">
               <ChatSidebar
                 activeChatId={activeChatId}
                 branding={config.sidebar}
                 actions={config.actions}
                 sections={config.sections}
                 recentChats={threads}
-                className="h-full w-full border-r border-slate-200/80 dark:border-slate-700/60"
+                className="flex h-full w-full"
                 onClearChat={clearChat}
                 onClearDraft={clearDraft}
                 onDeleteChat={deleteChat}
@@ -391,6 +539,7 @@ export default function ChatShell() {
             />
           </div>
         ) : null}
+
         <ChatSidebar
           activeChatId={activeChatId}
           branding={config.sidebar}
@@ -405,7 +554,7 @@ export default function ChatShell() {
           onSelectChat={selectChat}
         />
 
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6f8] dark:bg-slate-900">
           <ChatHeader
             eyebrow={config.header.eyebrow}
             title={config.header.title}
@@ -414,38 +563,77 @@ export default function ChatShell() {
             onToggleTheme={toggleTheme}
             onOpenSidebar={() => setIsSidebarOpen(true)}
           />
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="px-4 pt-4 sm:px-6 sm:pt-6">
-              <ChatMobileIntro
-                badge={config.mobileIntro.badge}
-                description={config.mobileIntro.description}
-              />
-            </div>
-            {error ? (
-              <div className="px-5 pt-4 text-sm text-rose-600 dark:text-rose-400 sm:px-6">{error}</div>
+
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {!showUrlPrompt ? (
+              <div className="shrink-0 px-4 pt-3 sm:px-6 lg:hidden">
+                <ChatMobileIntro
+                  badge={config.mobileIntro.badge}
+                  description={config.mobileIntro.description}
+                />
+              </div>
             ) : null}
-            <ChatMessageList messages={messages} />
+
+            {error ? (
+              <div className="w-full shrink-0 px-4 pt-3 text-sm text-rose-600 dark:text-rose-400 sm:px-6 lg:px-8">
+                {error}
+              </div>
+            ) : null}
+
+            {showUrlPrompt ? (
+              <ChatUrlPrompt
+                disabled={isParsingPage || !activeChatId}
+                error={parseError}
+                status={parseStatus}
+                onParse={parsePageForActiveChat}
+                onSkip={skipUrlPrompt}
+              />
+            ) : (
+              <ChatMessageList
+                messages={messages}
+                thinking={
+                  isSubmitting && replyStatus
+                    ? {
+                        label: replyStatus.label,
+                        detail: replyStatus.detail,
+                        step: replyStatus.step,
+                        maxSteps: replyStatus.maxSteps,
+                      }
+                    : isSubmitting
+                      ? {
+                          label: "Working…",
+                          detail: "Waiting on the local model",
+                          step: 0,
+                          maxSteps: 5,
+                        }
+                      : null
+                }
+              />
+            )}
           </div>
-          <ChatComposer
-            addModelDraft={addModelDraft}
-            draft={draft}
-            quickPrompts={config.quickPrompts}
-            composerCopy={config.composer}
-            models={models}
-            selectedModel={selectedModel}
-            disabled={isSubmitting}
-            isAddModelOpen={isAddModelOpen}
-            isAddingModel={isAddingModel}
-            onAddModel={addModel}
-            onAddModelDraftChange={setAddModelDraft}
-            onCloseAddModel={() => setIsAddModelOpen(false)}
-            onDraftChange={setDraft}
-            onClearDraft={clearDraft}
-            onModelChange={setSelectedModel}
-            onOpenAddModel={() => setIsAddModelOpen(true)}
-            onPromptSelect={setDraft}
-            onSubmit={handleSendMessage}
-          />
+
+          {!showUrlPrompt ? (
+            <ChatComposer
+              addModelDraft={addModelDraft}
+              draft={draft}
+              quickPrompts={config.quickPrompts}
+              composerCopy={config.composer}
+              models={models}
+              selectedModel={selectedModel}
+              disabled={isSubmitting}
+              isAddModelOpen={isAddModelOpen}
+              isAddingModel={isAddingModel}
+              onAddModel={addModel}
+              onAddModelDraftChange={setAddModelDraft}
+              onCloseAddModel={() => setIsAddModelOpen(false)}
+              onDraftChange={setDraft}
+              onClearDraft={clearDraft}
+              onModelChange={setSelectedModel}
+              onOpenAddModel={() => setIsAddModelOpen(true)}
+              onPromptSelect={setDraft}
+              onSubmit={handleSendMessage}
+            />
+          ) : null}
         </section>
       </div>
     </main>

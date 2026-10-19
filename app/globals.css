@@ -27,16 +27,22 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 html {
-  background: #d6e0ea;
+  background: #f4f6f8;
 }
 
 html.dark {
-  background: #0d1117;
+  background: #0b1220;
 }
 
 body {
-  background: var(--background);
+  background: transparent;
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
 }

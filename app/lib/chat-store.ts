@@ -1,8 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { ollama, resolveAvailableOllamaModel, type OllamaMessage } from "./ollama";
-import { agentFunctions, ollamaTools } from "./tools";
+import { ollama, resolveAvailableOllamaModel } from "./ollama";
+import { scrapeUrl } from "./scraper";
+import { resolveDataDir } from "./data-dir";
+import { getAIService } from "@/lib/ai/service";
+import {
+  buildChatPrompt,
+  buildStoredPageContext,
+  clipChatHistory,
+  extractHttpUrls,
+  LOCAL_NUM_CTX,
+  parseStoredPageContext,
+  selectPageExcerpt,
+  serializePageContext,
+  urlsMatch,
+  type StoredPageContext,
+} from "./page-context";
 import type {
   ChatShellData,
   ChatUiConfig,
@@ -23,9 +37,6 @@ type MessageRow = {
   text: string;
 };
 
-const dbDirectory = path.join(process.cwd(), "data");
-const dbPath = path.join(dbDirectory, "chat.sqlite");
-
 let db: Database.Database | null = null;
 
 function ensureDb() {
@@ -33,6 +44,8 @@ function ensureDb() {
     return db;
   }
 
+  const dbDirectory = resolveDataDir();
+  const dbPath = path.join(dbDirectory, "chat.sqlite");
   fs.mkdirSync(dbDirectory, { recursive: true });
 
   const instance = new Database(dbPath);
@@ -61,179 +74,164 @@ function ensureDb() {
     );
   `);
 
+  // Parsed page content for AI context — not shown in the chat UI.
+  const threadColumns = instance
+    .prepare("PRAGMA table_info(threads)")
+    .all() as Array<{ name: string }>;
+  if (!threadColumns.some((column) => column.name === "page_context")) {
+    instance.exec("ALTER TABLE threads ADD COLUMN page_context TEXT");
+  }
+
   db = instance;
   return instance;
+}
+
+function getThreadPageContext(threadId: number): string | null {
+  const instance = ensureDb();
+  const row = instance
+    .prepare("SELECT page_context FROM threads WHERE id = ?")
+    .get(threadId) as { page_context: string | null } | undefined;
+  const value = row?.page_context?.trim();
+  return value ? value : null;
 }
 
 function getTimestampLabel() {
   return "Just now";
 }
 
-async function generateAssistantReply(messages: Message[], model?: string) {
-  const resolvedModel = await resolveAvailableOllamaModel(model);
+export type AgentProgress = {
+  step: number;
+  maxSteps: number;
+  label: string;
+  detail?: string;
+};
 
-  const ollamaMessages: OllamaMessage[] = [
-    {
-      role: "system",
-      content: "You are a helpful AI web scraping assistant. When the user asks you to scrape or extract data from a website, you MUST use the 'scrapePage' tool, providing both the URL and a specific prompt describing what data to extract (e.g. 'Extract all table data'). After you receive the result from the tool, present it to the user and STOP.",
-    },
-    ...messages.map((message) => ({
-      role: message.role as any,
-      content: message.text,
-    }))
-  ];
+const MAX_REPLY_STEPS = 3;
 
-  console.log("message", ollamaMessages)
-
-  const MAX_STEPS = 5;
-  let step = 0;
-  let lastToolCallKey = "";
-
-  console.log(`\n--- [Agent] New Request Started ---`);
-  console.log(`[Agent] Model resolved: ${resolvedModel}`);
-  console.log(`[Agent] Initial messages count: ${messages.length}`);
-
-  while (step < MAX_STEPS) {
-    step++;
-    const isLastStep = step === MAX_STEPS;
-    console.log(`[Agent] >> Step ${step}/${MAX_STEPS}${isLastStep ? " (final — no tools)" : ""}`);
-    console.log(`[Agent] Sending chat request with ${ollamaMessages.length} messages in history...`);
-
-    const startTime = Date.now();
-    const response = await ollama.chat({
-      model: resolvedModel,
-      messages: ollamaMessages,
-      // On the last step, omit tools to force the model to produce a text answer
-      tools: isLastStep ? undefined : ollamaTools,
-      stream: false,
-    });
-    console.log(`[Agent] Received response in ${Date.now() - startTime}ms.`);
-
-    const responseMessage = response.message;
-
-    // Collect tool calls from the proper field OR parse them from content text
-    let toolCalls = responseMessage.tool_calls ?? [];
-
-    // Fallback: some models (e.g. llama3.2) dump tool calls as JSON text in content
-    if (!isLastStep && toolCalls.length === 0 && responseMessage.content) {
-      const parsed = tryParseToolCallFromText(responseMessage.content);
-      if (parsed) {
-        console.log(`[Agent] Fallback: Successfully parsed tool call "${parsed.function.name}" from text content.`);
-        toolCalls = [parsed];
-        // Clear the content since it was actually a tool call, not a real answer
-        responseMessage.content = "";
-      } else {
-        console.log(`[Agent] No tool calls detected in this step.`);
-      }
-    } else if (toolCalls.length > 0) {
-      console.log(`[Agent] Detected ${toolCalls.length} tool call(s) from model response.`);
-    }
-
-    // Append the assistant message to history
-    ollamaMessages.push(responseMessage);
-
-    // If there are tool calls, execute them
-    if (toolCalls.length > 0) {
-      // Detect repeated identical tool calls to prevent infinite loops
-      const currentToolCallKey = JSON.stringify(
-        toolCalls.map((tc: any) => ({ name: tc.function.name, args: tc.function.arguments }))
-      );
-      if (currentToolCallKey === lastToolCallKey) {
-        console.log("[Agent] Detected repeated identical tool call — forcing final answer");
-        // Re-send without tools to force a text answer
-        const finalResponse = await ollama.chat({
-          model: resolvedModel,
-          messages: ollamaMessages,
-          stream: false,
-        });
-        const finalText = finalResponse.message.content?.trim();
-        if (finalText) {
-          return finalText;
-        }
-        throw new Error("Ollama returned an empty response after repeated tool calls.");
-      }
-      lastToolCallKey = currentToolCallKey;
-
-      for (const toolCall of toolCalls) {
-        const functionName = toolCall.function.name;
-        const functionArgs = toolCall.function.arguments;
-
-        console.log(`[Agent] >> Executing tool: "${functionName}" with args:`, functionArgs);
-        const toolStartTime = Date.now();
-
-        let functionResult = "";
-        try {
-          if (agentFunctions[functionName as keyof typeof agentFunctions]) {
-            functionResult = await (agentFunctions as any)[functionName](functionArgs);
-          } else {
-            functionResult = `Error: Tool "${functionName}" not found`;
-          }
-        } catch (err) {
-          functionResult = `Error executing tool: ${err}`;
-        }
-
-        const duration = Date.now() - toolStartTime;
-        const resultString = typeof functionResult === "string" ? functionResult : JSON.stringify(functionResult);
-        const resultPreview = resultString.length > 150 ? resultString.slice(0, 150) + "... [truncated]" : resultString;
-
-        console.log(`[Agent] << Tool "${functionName}" completed in ${duration}ms. Preview: ${resultPreview}`);
-
-        ollamaMessages.push({
-          role: "tool",
-          content: resultString,
-        });
-      }
-      continue;
-    }
-
-    // No tool calls — this is the final text answer
-    const text = responseMessage.content?.trim();
-    if (!text) {
-      throw new Error("Ollama returned an empty response.");
-    }
-
-    console.log(`[Agent] Final text answer generated (${text.length} chars).`);
-    console.log(`--- [Agent] Request Completed ---\n`);
-    return text;
-  }
-
-  throw new Error("Agent reached maximum steps without answering.");
+function setThreadPageContext(threadId: number, page: StoredPageContext) {
+  ensureDb()
+    .prepare("UPDATE threads SET page_context = ? WHERE id = ?")
+    .run(serializePageContext(page), threadId);
 }
 
-/**
- * Some models don't use the tool_calls field properly — they write the
- * tool invocation as JSON inside the content string instead.
- * This function detects and normalizes that into a proper tool call object.
- */
-function tryParseToolCallFromText(text: string) {
-  // Extract the first JSON-like block from the text to ignore tokens like <|im_start|>
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
-    return null;
-  }
-
+async function completePlainText(
+  system: string,
+  user: string,
+  model?: string
+): Promise<{ text: string; detail: string }> {
   try {
-    const parsed = JSON.parse(match[0]);
+    const ai = getAIService();
+    await ai.reload();
+    const settings = await ai.getSettings();
+    const provider = settings.providers.find(
+      (item) => item.id === settings.defaultProviderId && item.enabled
+    );
 
-    // Format: {"name": "funcName", "arguments": {...}}
-    if (parsed.name && typeof parsed.name === "string" && parsed.name in agentFunctions) {
-      return {
-        function: {
-          name: parsed.name,
-          arguments: parsed.arguments ?? {},
-        },
-      };
+    // The default install is a mock provider. Real chat uses a configured
+    // provider, then Ollama when that provider is missing or fails.
+    if (provider && provider.kind !== "mock") {
+      const routed = await ai.runTask({
+        task: "interpret",
+        system,
+        input: user,
+        outputSchema: null,
+        model: provider.kind === "ollama" ? model : undefined,
+      });
+      const text = routed.response.text.trim();
+      if (text) {
+        return {
+          text,
+          detail: `${provider.name} (${routed.response.model || provider.model || "default"})`,
+        };
+      }
     }
-
-    // Format: {"function": {"name": "funcName", "arguments": {...}}}
-    if (parsed.function?.name && typeof parsed.function.name === "string" && parsed.function.name in agentFunctions) {
-      return parsed;
-    }
-
-    return null;
-  } catch {
-    return null;
+  } catch (error) {
+    console.warn(
+      "[Agent] Configured provider failed, falling back to Ollama:",
+      error instanceof Error ? error.message : error
+    );
   }
+
+  const resolvedModel = await resolveAvailableOllamaModel(model);
+  const response = await ollama.chat({
+    model: resolvedModel,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    options: { num_ctx: LOCAL_NUM_CTX },
+    stream: false,
+  });
+  const text = response.message.content?.trim();
+  if (!text) {
+    throw new Error("The model returned an empty response.");
+  }
+  return { text, detail: `Ollama ${resolvedModel}` };
+}
+
+async function generateAssistantReply(
+  threadId: number,
+  messages: Message[],
+  model?: string,
+  pageContext?: string | null,
+  onProgress?: (progress: AgentProgress) => void
+) {
+  const report = (progress: AgentProgress) => {
+    onProgress?.(progress);
+    console.log(
+      `[Agent] ${progress.label}${progress.detail ? ` — ${progress.detail}` : ""} (${progress.step}/${progress.maxSteps})`
+    );
+  };
+
+  const question = [...messages].reverse().find((message) => message.role === "user")?.text ?? "";
+  let stored = parseStoredPageContext(pageContext);
+  const freshUrl = extractHttpUrls(question).find(
+    (url) => !stored?.url || !urlsMatch(url, stored.url)
+  );
+
+  report({
+    step: freshUrl ? 1 : 2,
+    maxSteps: MAX_REPLY_STEPS,
+    label: freshUrl ? "Reading page" : "Preparing context",
+    detail: freshUrl ? freshUrl : stored ? "Selecting a short page excerpt" : "No page loaded",
+  });
+
+  if (freshUrl) {
+    const scraped = await scrapeUrl(freshUrl);
+    stored = buildStoredPageContext({
+      title: scraped.title || "Untitled page",
+      url: scraped.url,
+      markdown: scraped.markdown,
+    });
+    setThreadPageContext(threadId, stored);
+  }
+
+  const excerpt = stored ? selectPageExcerpt(stored, question) : "";
+  const { system, user } = buildChatPrompt({
+    excerpt,
+    history: clipChatHistory(messages),
+    question,
+  });
+
+  report({
+    step: 2,
+    maxSteps: MAX_REPLY_STEPS,
+    label: "Writing answer",
+    detail: excerpt ? `${excerpt.length} character excerpt` : "Question only",
+  });
+
+  const started = Date.now();
+  const result = await completePlainText(system, user, model);
+  console.log(`[Agent] Received response in ${Date.now() - started}ms.`);
+
+  report({
+    step: MAX_REPLY_STEPS,
+    maxSteps: MAX_REPLY_STEPS,
+    label: "Done",
+    detail: `${result.detail} · ${result.text.length} chars`,
+  });
+
+  return result.text;
 }
 
 function buildThreadMetadata(nextMessages: Message[]) {
@@ -350,7 +348,7 @@ export function clearThread(threadId: number) {
       .prepare(
         `
         UPDATE threads
-        SET title = ?, preview = ?, updated_at_label = ?, updated_at_ms = ?
+        SET title = ?, preview = ?, updated_at_label = ?, updated_at_ms = ?, page_context = NULL
         WHERE id = ?
         `
       )
@@ -433,7 +431,11 @@ export function saveUserMessage(threadId: number, text: string) {
   return getThread(threadId);
 }
 
-export async function generateReply(threadId: number, model?: string) {
+export async function generateReply(
+  threadId: number,
+  model?: string,
+  onProgress?: (progress: AgentProgress) => void
+) {
   const instance = ensureDb();
   const thread = getThread(threadId);
 
@@ -441,7 +443,13 @@ export async function generateReply(threadId: number, model?: string) {
     return null;
   }
 
-  const assistantText = await generateAssistantReply(thread.messages, model);
+  const assistantText = await generateAssistantReply(
+    threadId,
+    thread.messages,
+    model,
+    getThreadPageContext(threadId),
+    onProgress
+  );
 
   const assistantMessage: Message = {
     id: Date.now(),
@@ -458,7 +466,7 @@ export async function generateReply(threadId: number, model?: string) {
         `
         INSERT INTO messages (id, thread_id, role, text, created_at_ms)
         VALUES (?, ?, ?, ?, ?)
-        `
+      `
       )
       .run(
         assistantMessage.id,
@@ -483,6 +491,119 @@ export async function generateReply(threadId: number, model?: string) {
         metadata.updatedAtMs,
         threadId
       );
+  });
+
+  insert();
+  return getThread(threadId);
+}
+
+function assertHttpUrl(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Enter a valid http(s) URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http and https URLs are supported.");
+  }
+
+  return parsed.toString();
+}
+
+/**
+ * First step for a new chat: scrape a page and seed the thread with
+ * user + assistant messages so follow-up questions have page context.
+ */
+export async function parsePageForThread(
+  threadId: number,
+  rawUrl: string,
+  focus?: string
+) {
+  const instance = ensureDb();
+  const thread = getThread(threadId);
+
+  if (!thread) {
+    return null;
+  }
+
+  if (thread.messages.length > 0) {
+    throw new Error("This chat already has messages. Start a new chat to parse a page.");
+  }
+
+  const url = assertHttpUrl(rawUrl.trim());
+  const scraped = await scrapeUrl(url);
+  const pageContext = serializePageContext(
+    buildStoredPageContext({
+      title: scraped.title || "Untitled page",
+      url: scraped.url,
+      markdown: scraped.markdown || "(No readable content extracted.)",
+      focus: focus?.trim(),
+    })
+  );
+
+  const userText = focus?.trim()
+    ? `Parse ${url}\nFocus: ${focus.trim()}`
+    : `Parse ${url}`;
+
+  const host = new URL(scraped.url).hostname;
+  const title = scraped.title || host;
+  const assistantText = focus?.trim()
+    ? `Parsing is done for “${title}”. Ready for questions about ${focus.trim()}.`
+    : `Parsing is done for “${title}”.`;
+
+  const now = Date.now();
+  const userMessage: Message = {
+    id: now,
+    role: "user",
+    text: userText,
+  };
+  const assistantMessage: Message = {
+    id: now + 1,
+    role: "assistant",
+    text: assistantText,
+  };
+
+  const threadTitle = title.slice(0, 48);
+  const preview = `Parsed ${host}`.slice(0, 56);
+  const updatedAt = getTimestampLabel();
+  const updatedAtMs = Date.now();
+
+  const insert = instance.transaction(() => {
+    instance
+      .prepare(
+        `
+        INSERT INTO messages (id, thread_id, role, text, created_at_ms)
+        VALUES (?, ?, ?, ?, ?)
+        `
+      )
+      .run(userMessage.id, threadId, userMessage.role, userMessage.text, now);
+
+    instance
+      .prepare(
+        `
+        INSERT INTO messages (id, thread_id, role, text, created_at_ms)
+        VALUES (?, ?, ?, ?, ?)
+        `
+      )
+      .run(
+        assistantMessage.id,
+        threadId,
+        assistantMessage.role,
+        assistantMessage.text,
+        now + 1
+      );
+
+    instance
+      .prepare(
+        `
+        UPDATE threads
+        SET title = ?, preview = ?, updated_at_label = ?, updated_at_ms = ?, page_context = ?
+        WHERE id = ?
+        `
+      )
+      .run(threadTitle, preview, updatedAt, updatedAtMs, pageContext, threadId);
   });
 
   insert();

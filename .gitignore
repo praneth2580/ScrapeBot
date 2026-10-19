@@ -19,12 +19,17 @@
 
 # production
 /build
+/dist-electron/
+/.next/standalone-app/
 
 # misc
 .DS_Store
 *.pem
 /data/*.sqlite
 /data/*.sqlite-*
+/data/secrets/
+/data/ai-settings.json
+/data/ai-settings.json.tmp
 
 # debug
 npm-debug.log*

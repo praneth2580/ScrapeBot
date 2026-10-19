@@ -69,6 +69,11 @@ export type SendMessageRequest = {
   model?: string;
 };
 
+export type ParsePageRequest = {
+  url: string;
+  focus?: string;
+};
+
 export type ChatModelOption = {
   value: string;
   name: string;
